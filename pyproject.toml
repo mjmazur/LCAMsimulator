@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "luciole"
+version = "0.1.0"
+description = "Optimal fixed-pointing plans for LEO satellite tracking camera networks"
+requires-python = ">=3.10"
+dependencies = [
+    "skyfield>=1.49",
+    "numpy>=1.26",
+    "matplotlib>=3.8",
+    "requests>=2.31",
+]
+
+[project.scripts]
+luciole = "luciole.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["luciole*"]
