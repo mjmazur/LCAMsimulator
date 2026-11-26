@@ -7,7 +7,9 @@ curve comes from one pass. Each camera's marginal gain is what it adds beyond
 the ones before it; it falls as cameras start re-observing passes already
 caught by their neighbours (and as the remaining non-overlapping sky holds less
 traffic). The recommended count is where that marginal gain drops below a
-fraction of the first camera's gain.
+fraction of the first camera's gain for `patience` cameras in a row -- a
+single weak camera (the satellite-count curve is noisy because greedy
+maximizes the pass-utility objective, not the count) doesn't end the sweep.
 """
 
 from __future__ import annotations
@@ -38,18 +40,32 @@ class Sweep:
     rows: list = field(default_factory=list)
     metric: str = "satellites"
     min_gain_fraction: float = 0.05
+    patience: int = 3
     recommended: int = 0
     saturated: bool = True  # False if the curve was still above threshold at the last camera
     reason: str = ""
 
 
+def recommend_count(gain_fractions: list, threshold: float, patience: int, curve_ended: bool) -> int:
+    """Cameras to build: stop before the first run of `patience` consecutive
+    cameras whose gain fraction is under `threshold`. A run cut short by the
+    end of the list counts only if `curve_ended`; the first camera is always kept."""
+    n = len(gain_fractions)
+    for i in range(1, n):
+        window = gain_fractions[i : i + patience]
+        if all(g < threshold for g in window) and (len(window) == patience or curve_ended):
+            return i
+    return n
+
+
 def camera_sweep(
     grid, cell_contributions, passes, fov, max_cameras: int, min_useful_arc_deg: float = 5.0,
-    min_camera_gap_deg: float = 0.0, metric: str = "satellites", min_gain_fraction: float = 0.05,
+    min_camera_gap_deg: float = 0.0, metric: str = "satellites", min_gain_fraction: float = 0.05, patience: int = 3,
 ) -> Sweep:
     if metric not in METRICS:
         raise ValueError(f"metric must be one of {METRICS}")
-    sweep = Sweep(metric=metric, min_gain_fraction=min_gain_fraction)
+    patience = max(1, int(patience))
+    sweep = Sweep(metric=metric, min_gain_fraction=min_gain_fraction, patience=patience)
 
     picks = optimize.select_pointings(
         grid, cell_contributions, max_cameras, fov, min_useful_arc_deg, min_camera_gap_deg, refine=False
@@ -81,21 +97,21 @@ def camera_sweep(
     for r in sweep.rows:
         r.gain_fraction = r.gain / first
 
-    # Recommended: the last camera whose own gain still clears the threshold
-    # (before the first one that doesn't).
-    rec = len(sweep.rows)
-    for r in sweep.rows[1:]:
-        if r.gain_fraction < min_gain_fraction:
-            rec = r.cameras - 1
-            break
+    # Recommended: stop before the first run of `patience` consecutive cameras
+    # that each add less than the threshold. A run cut short by the end of the
+    # curve counts only if the curve really ended (nothing more to place); if
+    # it was merely truncated by --max-cameras the answer isn't known yet.
+    n = len(sweep.rows)
+    curve_ended = len(picks) < max_cameras
+    rec = recommend_count([r.gain_fraction for r in sweep.rows], min_gain_fraction, patience, curve_ended)
     sweep.recommended = rec
-    if rec < len(sweep.rows):
+    if rec < n:
         sweep.reason = (
-            f"camera {rec + 1} would add only {sweep.rows[rec].gain_fraction:.1%} of the first camera's gain "
-            f"(threshold {min_gain_fraction:.1%})"
+            f"cameras {rec + 1}-{min(rec + patience, n)} each add under {min_gain_fraction:.1%} of the first camera's gain "
+            f"(first of them: {sweep.rows[rec].gain_fraction:.1%})"
         )
-    elif len(picks) < max_cameras:
-        sweep.reason = f"no further non-overlapping pointing adds any detectable pass after {len(picks)} cameras"
+    elif curve_ended:
+        sweep.reason = f"no further non-overlapping pointing adds any detectable pass after {n} cameras"
     else:
         sweep.saturated = False
         sweep.reason = f"still gaining at {max_cameras} cameras -- raise --max-cameras"
@@ -106,6 +122,7 @@ def sweep_to_dict(sweep: Sweep) -> dict:
     return {
         "metric": sweep.metric,
         "min_gain_fraction": sweep.min_gain_fraction,
+        "patience": sweep.patience,
         "recommended_cameras": sweep.recommended,
         "saturated": sweep.saturated,
         "reason": sweep.reason,

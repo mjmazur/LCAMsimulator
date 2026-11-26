@@ -77,6 +77,7 @@ class RunConfig:
     max_cameras: int = 24
     min_camera_gain: float = 0.05  # stop when a camera adds < this fraction of the first camera's gain
     camera_metric: str = "satellites"
+    camera_patience: int = 3  # consecutive weak cameras needed to stop the sweep
     # -5:26 (-5.43 deg) is the sun-altitude horizon RMS itself uses to bound
     # its nightly capture window (RMS/CaptureDuration.py, via pyephem), so we
     # default to the same convention for consistency with the camera network

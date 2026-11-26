@@ -52,6 +52,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="--optimize-cameras threshold: smallest worthwhile marginal gain, as a fraction of camera 1's gain (default 0.05)",
     )
     cam.add_argument(
+        "--camera-patience", type=int, default=3,
+        help="--optimize-cameras stops only after this many cameras in a row fall below the threshold (default 3; 1 = stop at the first)",
+    )
+    cam.add_argument(
         "--camera-metric", choices=["satellites", "objective", "arc"], default="satellites",
         help="What the sweep measures: distinct satellites (default), the pass-utility objective, or total arc-length",
     )
@@ -157,6 +161,7 @@ def _build_config(args) -> RunConfig:
         max_cameras=args.max_cameras,
         min_camera_gain=args.min_camera_gain,
         camera_metric=args.camera_metric,
+        camera_patience=args.camera_patience,
         limiting_magnitude=args.limiting_magnitude,
         std_magnitude=args.std_magnitude,
         min_useful_arc_deg=args.min_useful_arc,
@@ -260,10 +265,11 @@ def run(config: RunConfig, verbose: bool = True) -> dict:
     if config.optimize_cameras:
         from . import sizing
 
-        log(f"Sweeping 1..{config.max_cameras} cameras ({config.camera_metric}, stop below {config.min_camera_gain:.0%} of camera 1's gain)...")
+        log(f"Sweeping 1..{config.max_cameras} cameras ({config.camera_metric}, stop after {config.camera_patience} below {config.min_camera_gain:.0%} of camera 1's gain)...")
         sweep = sizing.camera_sweep(
             placement_grid, placement_contributions, passes, config.camera_spec, config.max_cameras,
             config.min_useful_arc_deg, config.min_camera_gap_deg, config.camera_metric, config.min_camera_gain,
+            config.camera_patience,
         )
         if not sweep.rows:
             raise RuntimeError(f"camera sweep found nothing to observe: {sweep.reason}")

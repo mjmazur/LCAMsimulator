@@ -71,7 +71,7 @@ greedy maximizes the pass-utility objective, not the satellite count; the `objec
 give ~18. A 12-16 camera rig is reasonable. All 12 pointings sit on the 30 deg altitude floor.
 
 ## Open / suggested next steps
-- Make the sweep stopping rule robust (require 2 consecutive cameras below threshold, or smooth).
+- (done) Sweep stopping rule now needs `--camera-patience` (default 3) consecutive weak cameras; on the leo curve this moves the recommendation 12 -> 15.
 - Calibrate `--std-magnitude` (+6 assumed) against real detections; consider per-type brightness
   (debris fainter than payloads).
 - Re-run housing for the new pointings (`--pointing-dir output/leo-optimize`).

@@ -185,8 +185,13 @@ Greedy selection is nested -- the best k+1 cameras start with the best k -- so o
 run to `--max-cameras` gives the whole curve of value vs camera count. Each camera's
 *marginal gain* is what it adds beyond the cameras before it. It falls as cameras begin
 re-observing passes their neighbours already caught (and as the remaining non-overlapping
-sky holds less traffic). The recommended count is the last camera whose marginal gain is
-at least `--min-camera-gain` (default 5%) of the first camera's. `--camera-metric` picks
+sky holds less traffic). The sweep stops at the first run of `--camera-patience` (default 3)
+consecutive cameras that each add under `--min-camera-gain` (default 5%) of the first
+camera's gain; the recommendation is the count before that run. Requiring a run, not a
+single weak camera, matters because the satellite-count curve is noisy (greedy maximizes the
+pass-utility objective, not the count), so one dip would otherwise end the sweep early
+(`--camera-patience 1` restores that). If the run is cut off by `--max-cameras` the result is
+reported as not saturated. `--camera-metric` picks
 what is measured: `satellites` (distinct satellites, default), `objective` (the pass-utility
 score) or `arc` (total arc-length). `--num-cameras` is ignored in this mode.
 

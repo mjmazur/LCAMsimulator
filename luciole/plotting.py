@@ -341,13 +341,22 @@ def plot_sun_altitude(eph, topos, ts, t_start, t_end, dark_intervals, threshold_
     plt.close(fig)
 
 
+def _camera_ticks(ax, ks):
+    """Camera-number x ticks: small font, thinned so labels never touch."""
+    n = len(ks)
+    step = 1 if n <= 16 else 2 if n <= 32 else 5
+    ax.set_xticks([k for k in ks if (k - ks[0]) % step == 0])
+    ax.tick_params(axis="both", labelsize=8)
+
+
 def plot_summary(camera_reports, output_path: str):
-    labels = [f"Cam {i + 1}" for i in range(len(camera_reports))]
+    n = len(camera_reports)
+    labels = [str(i + 1) for i in range(n)]
     counts = [len(r.satellite_indices) for r in camera_reports]
     arclengths = [r.total_arclength_deg for r in camera_reports]
     colors = [_camera_color(i) for i in range(len(camera_reports))]
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4), facecolor=SURFACE)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(max(10, 0.4 * n * 2 + 2), 4), facecolor=SURFACE)
 
     ax1.bar(labels, counts, color=colors)
     ax1.set_ylabel("Distinct satellites captured", color=TEXT_SECONDARY)
@@ -358,6 +367,11 @@ def plot_summary(camera_reports, output_path: str):
     ax2.set_ylabel("Total arc-length (deg)", color=TEXT_SECONDARY)
     ax2.set_title("Arc-length per camera", color=TEXT_PRIMARY)
     _style_axes(ax2)
+    for ax in (ax1, ax2):
+        ax.set_xlabel("Camera", color=TEXT_SECONDARY, fontsize=9)
+        ax.tick_params(axis="both", labelsize=8)
+        if n > 16:
+            ax.set_xticks(range(0, n, 2 if n <= 32 else 5))
 
     fig.tight_layout()
     _savefig(fig, output_path)
@@ -379,15 +393,18 @@ def plot_camera_sweep(sweep, output_path: str):
     ax1.set_title("Observed vs number of cameras", color=TEXT_PRIMARY)
     ax2.bar(ks, gains, color=CATEGORICAL[0], alpha=0.85)
     thresh = sweep.min_gain_fraction * (gains[0] if gains else 0.0)
-    ax2.axhline(thresh, color=CATEGORICAL[1], linestyle="--", linewidth=1.2, label=f"threshold ({sweep.min_gain_fraction:.0%} of camera 1)")
+    ax2.axhline(thresh, color=CATEGORICAL[1], linestyle="--", linewidth=1.2, label=f"threshold ({sweep.min_gain_fraction:.0%} of camera 1, {sweep.patience} in a row)")
     ax2.set_xlabel("Camera added", color=TEXT_SECONDARY)
     ax2.set_ylabel("Marginal gain", color=TEXT_SECONDARY)
     ax2.set_title("What each added camera contributes", color=TEXT_PRIMARY)
-    ax2.legend(frameon=False, labelcolor=TEXT_SECONDARY)
+    ax2.legend(frameon=False, labelcolor=TEXT_SECONDARY, fontsize=8)
     for ax in (ax1, ax2):
         _style_axes(ax)
-        ax.set_xticks(ks if len(ks) <= 25 else ks[:: max(1, len(ks) // 12)])
-        ax.axvline(sweep.recommended, color=CATEGORICAL[1], linewidth=1.2, alpha=0.7)
+        _camera_ticks(ax, ks)
+        ax.set_xlabel(ax.get_xlabel(), fontsize=9, color=TEXT_SECONDARY)
+        ax.set_ylabel(ax.get_ylabel(), fontsize=9, color=TEXT_SECONDARY)
+    ax1.axvline(sweep.recommended, color=CATEGORICAL[1], linewidth=1.2, alpha=0.7)
+    ax2.axvline(sweep.recommended + 0.5, color=CATEGORICAL[1], linewidth=1.2, alpha=0.7)  # between kept and dropped cameras
     ax1.annotate(f"recommended: {sweep.recommended}", (sweep.recommended, curve[sweep.recommended - 1]),
                  textcoords="offset points", xytext=(8, -14), color=TEXT_PRIMARY, fontsize=9)
     fig.tight_layout()
