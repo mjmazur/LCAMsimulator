@@ -102,13 +102,21 @@ def pass_arclength_in_fov(sat_pass: SatPass, az0: float, alt0: float, fov: Camer
     return float(mask_arclength(mask, _segment_lengths(sat_pass)))
 
 
-def _score_grid_serial(indexed_passes: list, grid, fov: CameraSpec, std_magnitude, limiting_magnitude):
+def _score_grid_serial(
+    indexed_passes: list, grid, fov: CameraSpec, std_magnitude, limiting_magnitude, want_spans: bool = False
+):
     """`indexed_passes` is a list of (pass_id, SatPass); pass_id is the pass's
-    index in the full pass list, so results merge across worker chunks."""
+    index in the full pass list, so results merge across worker chunks.
+
+    With `want_spans`, returns (cell_contributions, cell_spans) where
+    cell_spans[i][pass_id] = (s_first, s_last): the along-track positions (deg
+    of arc from the start of the pass) of the first and last detectable
+    in-FOV sample in cell i."""
     grid_az = np.array([az for az, _ in grid])
     grid_alt = np.array([alt for _, alt in grid])
     frames = boresight_frames_batch(grid_az, grid_alt)  # fixed for the whole grid; compute once
     cell_contributions = [dict() for _ in grid]
+    cell_spans = [dict() for _ in grid] if want_spans else None
 
     for pass_id, sat_pass in indexed_passes:
         mask = in_fov_multi(
@@ -121,11 +129,20 @@ def _score_grid_serial(indexed_passes: list, grid, fov: CameraSpec, std_magnitud
         if not mask.any():
             continue
 
-        contrib = mask_arclength(mask, _segment_lengths(sat_pass))  # (n_cells,)
-        for cell_idx in np.flatnonzero(contrib):
+        seg = _segment_lengths(sat_pass)
+        contrib = mask_arclength(mask, seg)  # (n_cells,)
+        hit = np.flatnonzero(contrib)
+        for cell_idx in hit:
             cell_contributions[cell_idx][pass_id] = float(contrib[cell_idx])
+        if want_spans and len(hit):
+            cum = np.concatenate(([0.0], np.cumsum(seg)))
+            m = mask[hit]
+            first = np.argmax(m, axis=1)
+            last = m.shape[1] - 1 - np.argmax(m[:, ::-1], axis=1)
+            for j, cell_idx in enumerate(hit):
+                cell_spans[cell_idx][pass_id] = (float(cum[first[j]]), float(cum[last[j]]))
 
-    return cell_contributions
+    return (cell_contributions, cell_spans) if want_spans else cell_contributions
 
 
 def _score_grid_worker(args):
@@ -153,6 +170,7 @@ def score_grid(
     n_workers: "int | None" = None,
     std_magnitude: "float | None" = None,
     limiting_magnitude: "float | None" = None,
+    want_spans: bool = False,
 ):
     """For each grid cell, the in-FOV arc-length (degrees) of every pass
     that crosses it, counting only samples detectable at `limiting_magnitude`
@@ -171,6 +189,8 @@ def score_grid(
     processes the same way `passes.compute_sat_passes` is, when there are
     enough passes to make it worthwhile.
 
+    With `want_spans`, returns (contributions, spans) -- see `_score_grid_serial`.
+
     `n_workers`: None (default) auto-detects all CPU cores minus one (leaving
     the OS/UI a core to stay responsive); 1 disables multiprocessing.
     """
@@ -179,10 +199,10 @@ def score_grid(
     indexed = list(enumerate(passes))
 
     if n_workers <= 1 or len(passes) < _MIN_PASSES_FOR_MULTIPROCESSING:
-        return _score_grid_serial(indexed, grid, fov, std_magnitude, limiting_magnitude)
+        return _score_grid_serial(indexed, grid, fov, std_magnitude, limiting_magnitude, want_spans)
 
     chunks = _chunk(indexed, n_workers)
-    args_list = [(chunk, grid, fov, std_magnitude, limiting_magnitude) for chunk in chunks]
+    args_list = [(chunk, grid, fov, std_magnitude, limiting_magnitude, want_spans) for chunk in chunks]
 
     try:
         with cf.ProcessPoolExecutor(max_workers=n_workers) as executor:
@@ -196,14 +216,20 @@ def score_grid(
             file=sys.stderr, flush=True,
         )
         if n_workers > 2:
-            return score_grid(passes, grid, fov, n_workers // 2, std_magnitude, limiting_magnitude)
-        return _score_grid_serial(indexed, grid, fov, std_magnitude, limiting_magnitude)
+            return score_grid(passes, grid, fov, n_workers // 2, std_magnitude, limiting_magnitude, want_spans)
+        return _score_grid_serial(indexed, grid, fov, std_magnitude, limiting_magnitude, want_spans)
 
     # Pass ids are globally unique across chunks, so partial dicts never collide.
     merged = [dict() for _ in grid]
+    merged_spans = [dict() for _ in grid] if want_spans else None
     for partial in partials:
-        for i, d in enumerate(partial):
+        contribs, spans = partial if want_spans else (partial, None)
+        for i, d in enumerate(contribs):
             if d:
                 merged[i].update(d)
+        if want_spans:
+            for i, d in enumerate(spans):
+                if d:
+                    merged_spans[i].update(d)
 
-    return merged
+    return (merged, merged_spans) if want_spans else merged

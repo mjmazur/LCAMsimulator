@@ -135,7 +135,12 @@ the file's basename is used instead of the group name.
 
 - `sky_scores_<group>.png` — candidate-pointing heatmap (arc-length-weighted) with the selected camera FOVs
 - `sky_density_<group>.png` — raw satellite-count density per patch of sky, with the selected camera FOVs
-- `sky_tracks_<group>.png` — the actual satellite tracks captured, by camera
+- `sky_tracks_<group>.png` — the actual satellite tracks captured, by camera. With
+  `--optimize-cameras` there are two: one per cutoff, tagged with it
+  (`sky_tracks_10pct_...` and `sky_tracks_5pct_...`, or `sky_tracks_100sats_...` and
+  `sky_tracks_50sats_...` with absolute cutoffs), each drawn with that cutoff's camera count
+- `camera_sweep_<group>.png` — `--optimize-cameras`: metric and marginal gain vs camera count, both cutoffs marked
+- `tradeoff_<group>.png` — `--tradeoff`: unique satellites vs observed path span
 - `timeline_<group>.png` — which camera(s) each satellite passes through, over time
 - `sun_altitude_<group>.png` — sun altitude and the dark-sky window(s) used
 - `summary_<group>.png` — satellites captured / arc-length per camera
@@ -179,6 +184,7 @@ the ` DEB` / `R/B` name suffix for objects missing from it.
 ```
 python -m luciole.cli --optimize-cameras                       # sweep 1..24, pick the count automatically
 python -m luciole.cli --optimize-cameras --max-cameras 40 --min-camera-gain 0.02 --location "London, Ontario"
+python -m luciole.cli --optimize-cameras --camera-metric objective --location "Alert, Nunavut" --date 2026-12-21
 ```
 
 Greedy selection is nested -- the best k+1 cameras start with the best k -- so one greedy
@@ -186,8 +192,10 @@ run to `--max-cameras` gives the whole curve of value vs camera count. Each came
 *marginal gain* is what it adds beyond the cameras before it. It falls as cameras begin
 re-observing passes their neighbours already caught (and as the remaining non-overlapping
 sky holds less traffic). The sweep stops at the first run of `--camera-patience` (default 3)
-consecutive cameras that each add under `--min-camera-gain` (default 5%) of the first
-camera's gain; the recommendation is the count before that run. Requiring a run, not a
+consecutive cameras that each add under `--min-camera-gain` (default 10%) of the first
+camera's gain; the recommendation is the count before that run. A second cutoff,
+`--alt-camera-gain` (default 5%, 0 = off), is reported alongside it (log, sweep plot, JSON
+`alt_recommended_cameras`) but does not change the placed pointings. Requiring a run, not a
 single weak camera, matters because the satellite-count curve is noisy (greedy maximizes the
 pass-utility objective, not the count), so one dip would otherwise end the sweep early
 (`--camera-patience 1` restores that). If the run is cut off by `--max-cameras` the result is
@@ -195,9 +203,53 @@ reported as not saturated. `--camera-metric` picks
 what is measured: `satellites` (distinct satellites, default), `objective` (the pass-utility
 score) or `arc` (total arc-length). `--num-cameras` is ignored in this mode.
 
+### Cutoff modes: fraction or absolute
+
+`--camera-gain-mode` sets how the two cutoffs are written:
+
+- `fraction`: fractions of camera 1's gain (`--min-camera-gain` 0.10, `--alt-camera-gain` 0.05).
+- `absolute`: gains in the sweep metric's own units (`--abs-camera-gain` 100,
+  `--abs-alt-camera-gain` 50, i.e. unique satellites with the default metric).
+- `auto` (default): `absolute` at |latitude| >= `--polar-latitude` (default 74, roughly
+  Resolute and north), `fraction` elsewhere.
+
+Why: at high latitude over a 24 h window (polar night falls back to the full day), one camera
+already sees nearly every distinct satellite, so camera 1's gain is large, later cameras add
+little, and the satellite metric stops at 1-2 cameras. Absolute cutoffs give a meaningful bar
+there, but the satellite count still saturates; `--camera-metric objective` (rewards
+in-FOV arc and re-observation, which keep growing) gives more realistic counts. Absolute
+cutoffs are in the sweep metric's units, so with `objective` or `arc` pair them with
+`--camera-gain-mode fraction` (or set `--abs-camera-gain` accordingly). For example,
+2026-12-21 at Eureka recommends 1 camera with the satellite metric and 7 with `objective`.
+The log, plots and JSON (`primary_cutoff`, `alt_cutoff`, `gain_mode`) state which cutoff was used.
+
 The run then proceeds as normal with the recommended count (including the swap refinement,
 so its numbers can be slightly better than the sweep's greedy curve). Extra outputs:
 `camera_sweep_<group>.png` (curve + per-camera marginal gain, recommended count marked) and a
 `camera_sweep` entry in the pointings JSON with the full table. If the curve is still above
 the threshold at `--max-cameras`, the run says so; raise the limit. With `--location`, each
 site gets its own sweep, so the recommended count can differ by site.
+
+## Observed path span and the satellites-vs-span tradeoff
+
+The default objective rewards in-FOV arc, which only counts the stretches of a track
+that are actually inside a camera's field of view. A second measure, **observed path
+span**, is the along-track arc from the first detectable sample in *any* camera to the
+last detectable sample in *any* camera, gaps between cameras included. A satellite
+seen in camera A and again further along in camera B has a span reaching from where A
+first saw it to where B last saw it. A satellite's span is the sum of its passes' spans
+over the window; "mean span per satellite" is total span / unique satellites.
+
+Every run reports it (log line and an `observed_path` block in the pointings JSON).
+Because span is not additive across cameras, it has its own optimizer (`luciole/pathspan.py`),
+which is greedy plus swap refinement -- a heuristic, not a proven optimum.
+
+- `--span-weight W` (0-1) picks pointings by mixing the two goals: 0 = most unique
+  satellites, 1 = longest observed path. Both are scaled against the best the pure
+  objective reaches, so W is the fraction of importance given to span. Without it the
+  pass-utility objective is used.
+- `--tradeoff` maps the frontier at the final camera count: it solves for
+  `--tradeoff-points` weights (default 11) and writes `tradeoff_<group>.png` (unique
+  satellites vs mean path per satellite, plus the percentage of each goal kept at each weight)
+  and a `tradeoff` block in the JSON with each point's statistics and pointings. The default
+  objective's result is shown for reference.

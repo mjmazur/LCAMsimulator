@@ -75,8 +75,21 @@ class RunConfig:
     # Camera-count sweep: pick the number of cameras automatically (num_cameras is then ignored).
     optimize_cameras: bool = False
     max_cameras: int = 24
-    min_camera_gain: float = 0.05  # stop when a camera adds < this fraction of the first camera's gain
+    min_camera_gain: float = 0.10  # stop when a camera adds < this fraction of the first camera's gain
     camera_metric: str = "satellites"
+    alt_camera_gain: float = 0.05  # second sweep cutoff reported next to min_camera_gain (0 = off)
+    # Path-span objective (see pathspan.py): span_weight None keeps the pass-utility objective; a value
+    # in [0, 1] chooses pointings by mixing unique satellites (0) with observed path span (1).
+    span_weight: "float | None" = None
+    tradeoff: bool = False  # also map the satellites-vs-span frontier at the final camera count
+    tradeoff_points: int = 11
+    # Sweep cutoffs as fractions of camera 1's gain ("fraction"), or as absolute gains in unique satellites
+    # ("absolute", abs_camera_gain / abs_alt_camera_gain). "auto" picks absolute at |latitude| >=
+    # polar_latitude_deg (Resolute, 74.7 N, and north of it), where camera 1 alone sees nearly everything.
+    camera_gain_mode: str = "auto"
+    abs_camera_gain: float = 100.0
+    abs_alt_camera_gain: float = 50.0
+    polar_latitude_deg: float = 74.0
     camera_patience: int = 3  # consecutive weak cameras needed to stop the sweep
     # -5:26 (-5.43 deg) is the sun-altitude horizon RMS itself uses to bound
     # its nightly capture window (RMS/CaptureDuration.py, via pyephem), so we

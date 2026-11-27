@@ -16,6 +16,7 @@ from matplotlib.colors import LinearSegmentedColormap
 from .geometry import fov_boundary_azalt
 from .models import CameraSpec, Pointing
 from .passes import contiguous_true_runs
+from .sizing import cutoff_label
 from .timewindow import sun_altitude_deg
 
 # Fixed categorical order (never cycled/re-sorted) -- see dataviz skill.
@@ -48,12 +49,34 @@ SEQUENTIAL_ORANGE = LinearSegmentedColormap.from_list(
 )
 
 
+_RUN_INFO = ""
+
+
+def set_run_info(text: str) -> None:
+    """Set the run-details text drawn at the bottom of every saved figure."""
+    global _RUN_INFO
+    _RUN_INFO = text or ""
+
+
 def _savefig(fig, output_path: str, retries: int = 3, delay_sec: float = 0.5):
     """`fig.savefig` with a few retries -- on Windows, a file that was just
     written/read by another process (antivirus scan, a previous run's own
     output, an image viewer) can transiently fail to open with
     OSError/PermissionError; a short retry avoids losing an expensive
     multi-minute propagation run to that flakiness."""
+    if _RUN_INFO:
+        # Reserve a strip at the bottom of the figure for the run-details box.
+        box_in = 1.1  # box height in inches, incl. padding
+        rect = (0, min(0.4, box_in / fig.get_figheight()), 1, 1)
+        if fig.get_layout_engine() is not None:
+            fig.tight_layout(rect=rect)
+        else:
+            fig.subplots_adjust(bottom=max(fig.subplotpars.bottom, rect[1] + 0.04))
+        fig.text(
+            0.01, 0.008, _RUN_INFO, ha="left", va="bottom", fontsize=6.5, color=TEXT_SECONDARY,
+            family="monospace", linespacing=1.35,
+            bbox=dict(boxstyle="round,pad=0.4", facecolor=SURFACE, edgecolor=BASELINE, linewidth=0.8),
+        )
     for attempt in range(retries):
         try:
             fig.savefig(output_path, dpi=150, facecolor=SURFACE)
@@ -86,8 +109,10 @@ def _style_axes(ax, polar=False):
 
 
 def _new_polar_fig():
-    fig = plt.figure(figsize=(7.5, 7.5), facecolor=SURFACE)
+    # Wider than tall: the right-hand 20% of the figure is reserved for the camera legend (see _camera_legend).
+    fig = plt.figure(figsize=(9.5, 7.5), facecolor=SURFACE)
     ax = fig.add_subplot(111, projection="polar")
+    fig.subplots_adjust(left=0.05, right=0.80)
     ax.set_theta_zero_location("N")
     ax.set_theta_direction(-1)
     _style_axes(ax, polar=True)
@@ -114,13 +139,19 @@ def _draw_horizon_and_floor(ax, min_elevation_deg: float):
         floor_r = 90.0 - min_elevation_deg
         theta = np.linspace(0, 2 * np.pi, 200)
         ax.plot(theta, np.full_like(theta, floor_r), color=MUTED, linewidth=1.0, linestyle=":", zorder=3)
-        # Placed in the SE quadrant, off any 45-degree tick angle and clear
-        # of the camera legend anchored at the plot's bottom-left.
+        # Placed in the SE quadrant, off any 45-degree tick angle.
         ax.text(
             np.radians(157.5), floor_r, f"  {min_elevation_deg:g}° min pointing alt",
             color=MUTED, fontsize=7, va="center", ha="left",
             bbox={"facecolor": SURFACE, "edgecolor": "none", "alpha": 0.75, "pad": 1.0},
         )
+
+
+def _camera_legend(fig, handles, labels=None):
+    """Camera legend in a column at the figure's right edge, outside the sky circle (and the colorbar)."""
+    kw = {"labels": labels} if labels is not None else {}
+    fig.legend(handles=handles, loc="center right", bbox_to_anchor=(0.995, 0.5), frameon=False,
+               labelcolor=TEXT_SECONDARY, fontsize=9, **kw)
 
 
 def plot_sky_scores(
@@ -162,7 +193,7 @@ def plot_sky_scores(
     _draw_horizon_and_floor(ax, pointing_floor_deg if pointing_floor_deg is not None else min_elevation_deg)
     ax.set_title("Candidate pointing score & selected cameras", color=TEXT_PRIMARY, pad=20)
     if ax.get_legend_handles_labels()[0]:  # none when no camera could be placed
-        ax.legend(loc="lower left", bbox_to_anchor=(-0.15, -0.1), frameon=False, labelcolor=TEXT_SECONDARY)
+        _camera_legend(fig, *ax.get_legend_handles_labels())
     _savefig(fig, output_path)
     plt.close(fig)
 
@@ -204,12 +235,12 @@ def plot_sky_density(
     _draw_horizon_and_floor(ax, pointing_floor_deg if pointing_floor_deg is not None else min_elevation_deg)
     ax.set_title("Satellite number density & selected cameras", color=TEXT_PRIMARY, pad=20)
     if ax.get_legend_handles_labels()[0]:  # none when no camera could be placed
-        ax.legend(loc="lower left", bbox_to_anchor=(-0.15, -0.1), frameon=False, labelcolor=TEXT_SECONDARY)
+        _camera_legend(fig, *ax.get_legend_handles_labels())
     _savefig(fig, output_path)
     plt.close(fig)
 
 
-def plot_sky_tracks(camera_reports, min_elevation_deg: float, output_path: str):
+def plot_sky_tracks(camera_reports, min_elevation_deg: float, output_path: str, title: str = "Captured satellite tracks by camera"):
     fig, ax = _new_polar_fig()
 
     # Selected pointings are often only a few degrees apart (deliberately, to
@@ -237,9 +268,9 @@ def plot_sky_tracks(camera_reports, min_elevation_deg: float, output_path: str):
         for i in range(len(camera_reports))
     ]
     _draw_horizon_and_floor(ax, min_elevation_deg)
-    ax.set_title("Captured satellite tracks by camera", color=TEXT_PRIMARY, pad=20)
+    ax.set_title(title, color=TEXT_PRIMARY, pad=20)
     if handles:
-        ax.legend(handles=handles, loc="lower left", bbox_to_anchor=(-0.15, -0.1), frameon=False, labelcolor=TEXT_SECONDARY)
+        _camera_legend(fig, handles)
     _savefig(fig, output_path)
     plt.close(fig)
 
@@ -378,6 +409,11 @@ def plot_summary(camera_reports, output_path: str):
     plt.close(fig)
 
 
+def _cutoff_text(sweep, alt: bool = False) -> str:
+    label = cutoff_label(sweep, alt)
+    return label if sweep.mode == "absolute" else f"{label} of camera 1"
+
+
 def plot_camera_sweep(sweep, output_path: str):
     """Value vs number of cameras (left) and each camera's marginal gain (right)."""
     ks = [r.cameras for r in sweep.rows]
@@ -393,7 +429,7 @@ def plot_camera_sweep(sweep, output_path: str):
     ax1.set_title("Observed vs number of cameras", color=TEXT_PRIMARY)
     ax2.bar(ks, gains, color=CATEGORICAL[0], alpha=0.85)
     thresh = sweep.min_gain_fraction * (gains[0] if gains else 0.0)
-    ax2.axhline(thresh, color=CATEGORICAL[1], linestyle="--", linewidth=1.2, label=f"threshold ({sweep.min_gain_fraction:.0%} of camera 1, {sweep.patience} in a row)")
+    ax2.axhline(thresh, color=CATEGORICAL[1], linestyle="--", linewidth=1.2, label=f"threshold ({_cutoff_text(sweep)}, {sweep.patience} in a row)")
     ax2.set_xlabel("Camera added", color=TEXT_SECONDARY)
     ax2.set_ylabel("Marginal gain", color=TEXT_SECONDARY)
     ax2.set_title("What each added camera contributes", color=TEXT_PRIMARY)
@@ -403,10 +439,56 @@ def plot_camera_sweep(sweep, output_path: str):
         _camera_ticks(ax, ks)
         ax.set_xlabel(ax.get_xlabel(), fontsize=9, color=TEXT_SECONDARY)
         ax.set_ylabel(ax.get_ylabel(), fontsize=9, color=TEXT_SECONDARY)
+    if sweep.alt_gain_fraction > 0:
+        alt_thresh = sweep.alt_gain_fraction * (gains[0] if gains else 0.0)
+        ax2.axhline(alt_thresh, color=CATEGORICAL[2], linestyle=":", linewidth=1.4,
+                    label=f"threshold ({_cutoff_text(sweep, alt=True)}, {sweep.patience} in a row)")
+        ax2.legend(frameon=False, labelcolor=TEXT_SECONDARY, fontsize=8)
+        ax1.axvline(sweep.alt_recommended, color=CATEGORICAL[2], linewidth=1.2, alpha=0.7, linestyle=":")
+        ax2.axvline(sweep.alt_recommended + 0.5, color=CATEGORICAL[2], linewidth=1.2, alpha=0.7, linestyle=":")
+        ax1.annotate(f"{cutoff_label(sweep, alt=True)} cutoff: {sweep.alt_recommended}", (sweep.alt_recommended, curve[sweep.alt_recommended - 1]),
+                     textcoords="offset points", xytext=(8, 10), color=TEXT_PRIMARY, fontsize=9)
     ax1.axvline(sweep.recommended, color=CATEGORICAL[1], linewidth=1.2, alpha=0.7)
     ax2.axvline(sweep.recommended + 0.5, color=CATEGORICAL[1], linewidth=1.2, alpha=0.7)  # between kept and dropped cameras
-    ax1.annotate(f"recommended: {sweep.recommended}", (sweep.recommended, curve[sweep.recommended - 1]),
+    ax1.annotate(f"{cutoff_label(sweep)} cutoff: {sweep.recommended}", (sweep.recommended, curve[sweep.recommended - 1]),
                  textcoords="offset points", xytext=(8, -14), color=TEXT_PRIMARY, fontsize=9)
+    fig.tight_layout()
+    _savefig(fig, output_path)
+    plt.close(fig)
+
+
+def plot_tradeoff(rows, baseline, num_cameras: int, output_path: str):
+    """Unique satellites vs observed path span per satellite as the span weight goes 0 -> 1."""
+    sats = [r.stats.n_satellites for r in rows]
+    mean_span = [r.stats.mean_span_per_sat_deg for r in rows]
+    total_span = [r.stats.total_span_deg for r in rows]
+    ws = [r.span_weight for r in rows]
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4.4), facecolor=SURFACE)
+    ax1.plot(sats, mean_span, marker="o", color=CATEGORICAL[0], linewidth=1.8, label=f"{num_cameras} cameras, span weight 0 to 1")
+    groups: dict = {}  # identical solutions share one label ("0.8-1.0")
+    for r, x, y in zip(rows, sats, mean_span):
+        groups.setdefault((x, round(y, 3)), []).append(r.span_weight)
+    for (x, y), w in groups.items():
+        text = f"{w[0]:.1f}" if len(w) == 1 else f"{w[0]:.1f}-{w[-1]:.1f}"
+        ax1.annotate(text, (x, y), textcoords="offset points", xytext=(5, 5), fontsize=7, color=TEXT_SECONDARY)
+    if baseline is not None:
+        ax1.scatter([baseline.n_satellites], [baseline.mean_span_per_sat_deg], marker="*", s=140, color=CATEGORICAL[1],
+                    zorder=5, label="default pass-utility objective")
+    ax1.set_xlabel("Unique satellites observed", fontsize=9, color=TEXT_SECONDARY)
+    ax1.set_ylabel("Mean observed path per satellite (deg)", fontsize=9, color=TEXT_SECONDARY)
+    ax1.set_title("Satellites vs path span", color=TEXT_PRIMARY)
+    ax1.legend(frameon=False, labelcolor=TEXT_SECONDARY, fontsize=8)
+
+    best_sats = max(sats) or 1
+    best_span = max(total_span) or 1.0
+    ax2.plot(ws, [100.0 * v / best_sats for v in sats], marker="o", color=CATEGORICAL[0], linewidth=1.8, label="unique satellites")
+    ax2.plot(ws, [100.0 * v / best_span for v in total_span], marker="s", color=CATEGORICAL[1], linewidth=1.8, label="total observed path span")
+    ax2.set_xlabel("Span weight (0 = satellites only, 1 = path span only)", fontsize=9, color=TEXT_SECONDARY)
+    ax2.set_ylabel("% of best value across the sweep", fontsize=9, color=TEXT_SECONDARY)
+    ax2.set_title("What each weight gives up", color=TEXT_PRIMARY)
+    ax2.legend(frameon=False, labelcolor=TEXT_SECONDARY, fontsize=8)
+    for ax in (ax1, ax2):
+        _style_axes(ax)
     fig.tight_layout()
     _savefig(fig, output_path)
     plt.close(fig)
